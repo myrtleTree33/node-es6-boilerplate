@@ -1,44 +1,69 @@
 import winston from 'winston';
 import expressWinston from 'express-winston';
+import WinstonCloudWatch from 'winston-cloudwatch';
 
-const { NODE_ENV } = process.env;
+const {
+  NODE_ENV,
+  CLOUDWATCH_GROUP_NAME,
+  CLOUDWATCH_ACCESS_KEY,
+  CLOUDWATCH_SECRET_KEY,
+  CLOUDWATCH_REGION
+} = process.env;
 
-const opts = {
-  level: 'info',
-  format: winston.format.json(),
-  defaultMeta: { service: 'App' },
-  transports: [
-    new winston.transports.File({ filename: 'error.log', level: 'error' }),
-    new winston.transports.File({ filename: 'combined.log' })
-  ]
+const genCloudWatchTransport = () => {
+  // Set cloudwatch config
+  const cloudwatchConfig = {
+    logGroupName: CLOUDWATCH_GROUP_NAME,
+    logStreamName: `${CLOUDWATCH_GROUP_NAME}-${NODE_ENV}`,
+    awsAccessKeyId: CLOUDWATCH_ACCESS_KEY,
+    awsSecretKey: CLOUDWATCH_SECRET_KEY,
+    awsRegion: CLOUDWATCH_REGION,
+    messageFormatter: ({ level, message, additionalInfo, meta }) =>
+      `[${level}] : ${message} \nAdditional Info: ${JSON.stringify(meta)}}`
+  };
+
+  return new WinstonCloudWatch(cloudwatchConfig);
 };
 
+// Set transports
+let transports = [
+  new winston.transports.Console({
+    format: winston.format.simple()
+  })
+];
+
+let format = winston.format.combine(
+  winston.format.colorize(),
+  winston.format.json()
+);
+
+// Configure Cloudwatch-specific options
+if (NODE_ENV === 'production') {
+  transports = [...transports, genCloudWatchTransport()];
+  format = winston.format.combine(winston.format.json());
+}
+
+// Setup options
+const opts = {
+  level: 'info',
+  format,
+  transports,
+  defaultMeta: { service: 'App' },
+  meta: true
+};
+
+// Expose logger
 export const logger = winston.createLogger(opts);
 
+// Expose logging middleware
 export const loggingMiddleware = () =>
   expressWinston.logger({
     ...opts,
-    ...{
-      transports: [new winston.transports.Console()],
-      format: winston.format.combine(winston.format.colorize(), winston.format.json()),
-      meta: true, // optional: control whether you want to log the meta data about the request (default to true)
-      msg: 'HTTP {{req.method}} {{req.url}}', // optional: customize the default logging message. E.g. "{{res.statusCode}} {{req.method}} {{res.responseTime}}ms {{req.url}}"
-      expressFormat: true, // Use the default Express/morgan request formatting. Enabling this will override any msg if true. Will only output colors with colorize set to true
-      colorize: true, // Color the text and status code, using the Express/morgan color palette (text: gray, status: default green, 3XX cyan, 4XX yellow, 5XX red).
-      ignoreRoute: (req, res) => {
-        return false;
-      }
+    meta: true,
+    msg: 'HTTP {{req.method}} {{req.url}}',
+    expressFormat: true,
+    colorize: true,
+    ignoreRoute: (req, res) => {
+      return false;
     }
   });
-
-//
-// If we're not in production then log to the `console` with the format:
-// `${info.level}: ${info.message} JSON.stringify({ ...rest }) `
-//
-if (NODE_ENV !== 'production') {
-  logger.add(
-    new winston.transports.Console({
-      format: winston.format.simple()
-    })
-  );
-}
